@@ -17,7 +17,7 @@ DIM='\033[2m'
 RESET='\033[0m'
 
 # ── Configuration ──────────────────────────────────────────────
-VERSION="1.1.0"
+VERSION="1.1.1"
 GITHUB_REPO="fiioonnn/macsweep"
 GITHUB_RAW_URL="https://raw.githubusercontent.com/${GITHUB_REPO}/main/macsweep.sh"
 GITHUB_API_URL="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
@@ -819,6 +819,13 @@ clean() {
     echo ""
     echo -e "  ${DIM}💡 Tip: Restart your Mac to fully reclaim all freed space.${RESET}"
     echo ""
+
+    local upd
+    upd=$(get_update_version)
+    if [ -n "$upd" ]; then
+        echo -e "  ${YELLOW}${BOLD}⬆ Update available:${RESET} ${DIM}v${VERSION} →${RESET} ${BOLD}${YELLOW}v${upd}${RESET}  ${DIM}— run ${BOLD}macsweep update${RESET}${DIM} to upgrade${RESET}"
+        echo ""
+    fi
 }
 
 # ── Main ───────────────────────────────────────────────────────
