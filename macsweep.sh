@@ -17,7 +17,7 @@ DIM='\033[2m'
 RESET='\033[0m'
 
 # ── Configuration ──────────────────────────────────────────────
-VERSION="1.1.1"
+VERSION="1.2.0"
 GITHUB_REPO="fiioonnn/macsweep"
 GITHUB_RAW_URL="https://raw.githubusercontent.com/${GITHUB_REPO}/main/macsweep.sh"
 GITHUB_API_URL="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
@@ -140,6 +140,33 @@ draw_progress_bar() {
     for ((i=0; i<filled; i++)); do bar="${bar}█"; done
     for ((i=0; i<empty; i++)); do bar="${bar}░"; done
     printf "${CYAN}[%s]${RESET} ${BOLD}%3d%%${RESET} ${DIM}%d/%d${RESET}" "$bar" "$pct" "$current" "$total"
+}
+
+# Read a single keystroke or escape sequence; emit symbolic name.
+# Maps: arrows, page up/down, home/end, enter, space, esc, plus literal chars.
+read_key() {
+    local key rest extra
+    IFS= read -rsn1 key
+    case "$key" in
+        $'\e')
+            IFS= read -rsn2 -t 0.1 rest
+            case "$rest" in
+                '[A') echo "up" ;;
+                '[B') echo "down" ;;
+                '[C') echo "right" ;;
+                '[D') echo "left" ;;
+                '[H') echo "home" ;;
+                '[F') echo "end" ;;
+                '[5') IFS= read -rsn1 -t 0.1 extra; echo "pgup" ;;
+                '[6') IFS= read -rsn1 -t 0.1 extra; echo "pgdn" ;;
+                '')   echo "esc" ;;
+                *)    echo "esc" ;;
+            esac
+            ;;
+        $'\n'|$'\r'|'') echo "enter" ;;
+        ' ')            echo "space" ;;
+        *)              echo "$key" ;;
+    esac
 }
 
 print_header() {
@@ -359,7 +386,8 @@ show_help() {
     echo -e "${BOLD}macsweep v${VERSION}${RESET} — Mac Cleanup Tool"
     echo ""
     echo -e "${BOLD}Usage:${RESET}"
-    echo "    macsweep              Run interactive cleanup"
+    echo "    macsweep              Open the main menu (arrow-key navigation)"
+    echo "    macsweep clean        Skip the menu, go straight to cleanup"
     echo "    macsweep install      Install macsweep globally to ${INSTALL_PATH}"
     echo "    macsweep update       Update to latest version from GitHub"
     echo "    macsweep uninstall    Remove macsweep from system"
@@ -378,7 +406,8 @@ show_help() {
 declare -a LABELS PATHS SIZES SIZES_BYTES CATEGORIES TYPES SELECTED
 INDEX=0
 
-# Types: path | clear | npm | yarn | pnpm | composer | gradle | pip | gem | pod | brew | docker
+# Types: path | clear | sudo_path | sudo_clear | npm | brew | docker | pod
+#        tm_snapshots | sleepimage | swapfiles | spotlight
 add_item() {
     local category="$1"
     local label="$2"
@@ -415,6 +444,52 @@ add_item() {
                 size="${info%|*}"
                 size_bytes="${info#*|}"
                 exists=1
+            fi
+            ;;
+        tm_snapshots)
+            if command -v tmutil &>/dev/null; then
+                local snap_count
+                snap_count=$(tmutil listlocalsnapshots / 2>/dev/null | grep -c "com.apple.TimeMachine")
+                if [ "$snap_count" -gt 0 ]; then
+                    size="${snap_count} snapshots"
+                    size_bytes=0
+                    exists=1
+                fi
+            fi
+            ;;
+        sleepimage)
+            if [ -e "/private/var/vm/sleepimage" ]; then
+                local kb
+                kb=$(sudo -n du -sk /private/var/vm/sleepimage 2>/dev/null | awk '{print $1}')
+                if [ -z "$kb" ]; then
+                    kb=$(stat -f %z /private/var/vm/sleepimage 2>/dev/null)
+                    [ -n "$kb" ] && kb=$((kb / 1024))
+                fi
+                [ -z "$kb" ] && kb=0
+                size_bytes=$((kb * 1024))
+                size=$(bytes_human "$size_bytes")
+                [ "$size_bytes" -gt 0 ] && exists=1
+            fi
+            ;;
+        swapfiles)
+            local total_kb=0 f kb
+            for f in /private/var/vm/swapfile*; do
+                [ -e "$f" ] || continue
+                kb=$(stat -f %z "$f" 2>/dev/null)
+                [ -n "$kb" ] && total_kb=$((total_kb + kb / 1024))
+            done
+            if [ "$total_kb" -gt 0 ]; then
+                size_bytes=$((total_kb * 1024))
+                size=$(bytes_human "$size_bytes")
+                exists=1
+            fi
+            ;;
+        sudo_path|sudo_clear)
+            if [ -e "$path" ]; then
+                info=$(get_size_info "$path")
+                size="${info%|*}"
+                size_bytes="${info#*|}"
+                [ "$size_bytes" -gt 0 ] && exists=1
             fi
             ;;
         clear)
@@ -521,6 +596,14 @@ scan() {
     add_item "🖥️  Apps"      "Raycast Cache"         "$HOME/Library/Application Support/com.raycast.macos/Cache" path
     add_item "🖥️  Apps"      "1Password Cache"       "$HOME/Library/Caches/com.1password.1password"              path
     add_item "🖥️  Apps"      "Voicemod Data"         "$HOME/Library/Application Support/VoicemodV3"              path
+    add_item "🖥️  Apps"      "Mail Caches"           "$HOME/Library/Containers/com.apple.mail/Data/Library/Caches"        path
+    add_item "🖥️  Apps"      "Mail Downloads"        "$HOME/Library/Containers/com.apple.mail/Data/Library/Mail Downloads" path
+    add_item "🖥️  Apps"      "Messages Cache"        "$HOME/Library/Group Containers/group.com.apple.messages/Library/Caches" path
+    add_item "🖥️  Apps"      "Adobe Cache"           "$HOME/Library/Caches/Adobe"                                path
+    add_item "🖥️  Apps"      "Adobe Common"          "$HOME/Library/Application Support/Adobe/Common/Media Cache Files" path
+    add_item "🖥️  Apps"      "Steam Cache"           "$HOME/Library/Application Support/Steam/appcache"          path
+    add_item "🖥️  Apps"      "Telegram Cache"        "$HOME/Library/Group Containers/6N38VWS5BX.ru.keepcoder.Telegram/postbox/media" path
+    add_item "🖥️  Apps"      "Dropbox Cache"         "$HOME/Dropbox/.dropbox.cache"                              path
 
     scan_begin_section "🐳 Docker"
     add_item "🐳 Docker"    "Docker Desktop (prune)" ""  docker
@@ -533,6 +616,17 @@ scan() {
     add_item "⚙️  System"    "Crash Reports"         "$HOME/Library/Application Support/CrashReporter"      path
     add_item "⚙️  System"    "Diagnostic Reports"    "$HOME/Library/Logs/DiagnosticReports"                  path
     add_item "⚙️  System"    "iOS Device Backups"    "$HOME/Library/Application Support/MobileSync/Backup"  path
+    add_item "⚙️  System"    "iOS Software Updates"  "$HOME/Library/iTunes/iPhone Software Updates"          path
+    add_item "⚙️  System"    "Quick Look Thumbnails" "$HOME/Library/Caches/com.apple.QuickLook.thumbnailcache" path
+    add_item "⚙️  System"    "Notification Cache"    "$HOME/Library/Application Support/NotificationCenter" path
+    add_item "⚙️  System"    "Saved Application State" "$HOME/Library/Saved Application State"              path
+
+    scan_begin_section "💾 macOS Storage"
+    add_item "💾 macOS Storage" "Time Machine local snapshots" "" tm_snapshots
+    add_item "💾 macOS Storage" "Sleep image (sudo)"           "" sleepimage
+    add_item "💾 macOS Storage" "Swap files (sudo)"            "" swapfiles
+    add_item "💾 macOS Storage" "/Library/Caches (sudo)"       "/Library/Caches"        sudo_clear
+    add_item "💾 macOS Storage" "/Library/Logs (sudo)"         "/Library/Logs"          sudo_clear
 
     scan_end_section
 
@@ -597,20 +691,210 @@ prompt_sensitive_items() {
     fi
 }
 
-# ── Interactive Menu ───────────────────────────────────────────
+# ── Main Menu ──────────────────────────────────────────────────
 
-show_menu() {
+MAIN_MENU_LABELS=(
+    "🧹  Clean up your Mac"
+    "⬆   Update macsweep"
+    "❓  Help & shortcuts"
+    "🔗  Open repository"
+    "🚪  Quit"
+)
+
+draw_main_menu() {
+    local cursor=$1
     print_header
 
     local upd
     upd=$(get_update_version)
     if [ -n "$upd" ]; then
-        echo -e "  ${YELLOW}${BOLD}⬆ Update available:${RESET} ${DIM}v${VERSION} →${RESET} ${BOLD}${YELLOW}v${upd}${RESET}  ${DIM}— press ${BOLD}u${RESET}${DIM} to update now${RESET}"
+        echo -e "  ${YELLOW}${BOLD}⬆ Update available:${RESET} ${DIM}v${VERSION} →${RESET} ${BOLD}${YELLOW}v${upd}${RESET}"
+        echo ""
+    fi
+
+    echo -e "  ${BOLD}What do you want to do?${RESET}"
+    echo ""
+
+    local n=${#MAIN_MENU_LABELS[@]}
+    for i in $(seq 0 $((n - 1))); do
+        if [ "$i" = "$cursor" ]; then
+            echo -e "    ${GREEN}${BOLD}▶ ${MAIN_MENU_LABELS[$i]}${RESET}"
+        else
+            echo -e "      ${DIM}${MAIN_MENU_LABELS[$i]}${RESET}"
+        fi
+    done
+
+    echo ""
+    echo -e "${DIM}  ──────────────────────────────────────────────────────────${RESET}"
+    echo -e "  ${DIM}↑↓ navigate · Enter select · Q quit${RESET}"
+    echo -e "  ${DIM}v${VERSION}${RESET}"
+}
+
+main_menu() {
+    local cursor=0
+    local n=${#MAIN_MENU_LABELS[@]}
+    [ -t 1 ] && printf '\033[?25l'
+
+    while true; do
+        draw_main_menu "$cursor"
+        local key
+        key=$(read_key)
+        case "$key" in
+            up|k)    cursor=$((cursor > 0 ? cursor - 1 : n - 1)) ;;
+            down|j)  cursor=$((cursor < n - 1 ? cursor + 1 : 0)) ;;
+            home)    cursor=0 ;;
+            end)     cursor=$((n - 1)) ;;
+            enter)
+                [ -t 1 ] && printf '\033[?25h'
+                case "$cursor" in
+                    0) cleanup_flow ;;
+                    1) update_action ;;
+                    2) help_action ;;
+                    3) open_repo_action ;;
+                    4) goodbye_exit ;;
+                esac
+                [ -t 1 ] && printf '\033[?25l'
+                ;;
+            q|Q|esc)
+                [ -t 1 ] && printf '\033[?25h'
+                goodbye_exit
+                ;;
+        esac
+    done
+}
+
+goodbye_exit() {
+    print_header
+    echo -e "  ${YELLOW}Bye! Nothing was harmed.${RESET}"
+    echo ""
+    exit 0
+}
+
+reset_scan_state() {
+    INDEX=0
+    LABELS=(); PATHS=(); SIZES=(); SIZES_BYTES=(); CATEGORIES=(); TYPES=(); SELECTED=()
+    SCAN_TOTAL_FOUND=0
+    SCAN_TOTAL_BYTES=0
+}
+
+cleanup_flow() {
+    reset_scan_state
+    scan
+    prompt_sensitive_items
+    if ! arrow_select; then
+        return
+    fi
+    if ! confirm; then
+        return
+    fi
+    clean
+    offer_install_after_clean
+
+    echo -e "  ${DIM}Press any key to return to menu...${RESET}"
+    read -rsn1
+}
+
+update_action() {
+    local upd
+    upd=$(get_update_version)
+    if [ -n "$upd" ]; then
+        self_update
+        exit 0
+    fi
+
+    print_header
+    print_section "Update macsweep"
+    echo ""
+    echo -e "  ${CYAN}↻${RESET}  Checking GitHub for updates..."
+    check_for_update_bg
+    local i=0
+    while [ -z "$(get_update_version)" ] && [ "$i" -lt 50 ]; do
+        sleep 0.1
+        i=$((i + 1))
+        [ ! -e "$UPDATE_TMPFILE" ] && break
+    done
+
+    upd=$(get_update_version)
+    if [ -n "$upd" ]; then
+        echo -e "  ${YELLOW}${BOLD}⬆ Update available:${RESET} v${VERSION} → ${BOLD}${YELLOW}v${upd}${RESET}"
+        echo ""
+        echo -ne "  Update now? ${DIM}[Y/n]:${RESET} "
+        read -r ans
+        if [[ ! "$ans" =~ ^[Nn] ]]; then
+            self_update
+            exit 0
+        fi
+    else
+        echo -e "  ${GREEN}✓ You're on the latest version (v${VERSION}).${RESET}"
+        echo ""
+        echo -e "  ${DIM}Press any key to return...${RESET}"
+        read -rsn1
+    fi
+}
+
+help_action() {
+    print_header
+    print_section "Help & shortcuts"
+    echo ""
+    echo -e "  ${BOLD}Keyboard${RESET}"
+    echo -e "    ${YELLOW}↑/↓${RESET}        Move cursor"
+    echo -e "    ${YELLOW}PgUp/PgDn${RESET}  Jump 10 rows"
+    echo -e "    ${YELLOW}Space${RESET}      Toggle item under cursor"
+    echo -e "    ${YELLOW}A / N${RESET}      Select all / select none"
+    echo -e "    ${YELLOW}Enter${RESET}      Confirm selection / activate menu item"
+    echo -e "    ${YELLOW}Q / Esc${RESET}    Back / Quit"
+    echo -e "    ${YELLOW}U${RESET}          Run update (when banner shows)"
+    echo ""
+    echo -e "  ${BOLD}Subcommands${RESET}"
+    echo -e "    ${CYAN}macsweep${RESET}             Open main menu"
+    echo -e "    ${CYAN}macsweep clean${RESET}       Skip menu, go straight to scan"
+    echo -e "    ${CYAN}macsweep install${RESET}     Install globally"
+    echo -e "    ${CYAN}macsweep update${RESET}      Self-update from GitHub"
+    echo -e "    ${CYAN}macsweep uninstall${RESET}   Remove from system"
+    echo -e "    ${CYAN}macsweep version${RESET}     Print version"
+    echo ""
+    echo -e "  ${BOLD}Environment${RESET}"
+    echo -e "    ${DIM}MACSWEEP_NO_UPDATE_CHECK=1${RESET}   Skip GitHub update check"
+    echo ""
+    echo -e "  ${BOLD}Repo${RESET}  https://github.com/${GITHUB_REPO}"
+    echo ""
+    echo -e "  ${DIM}Press any key to return...${RESET}"
+    read -rsn1
+}
+
+open_repo_action() {
+    local url="https://github.com/${GITHUB_REPO}"
+    print_header
+    print_section "Open repository"
+    echo ""
+    if command -v open &>/dev/null; then
+        open "$url" 2>/dev/null
+        echo -e "  ${CYAN}🔗${RESET}  Opened ${BOLD}${url}${RESET}"
+    else
+        echo -e "  ${CYAN}🔗${RESET}  Visit: ${BOLD}${url}${RESET}"
+    fi
+    echo ""
+    echo -e "  ${DIM}Press any key to return...${RESET}"
+    read -rsn1
+}
+
+# ── Interactive Menu ───────────────────────────────────────────
+
+# Render the selection menu with cursor at $cursor row.
+# Index $1 = cursor index in INDEX-space (0..INDEX-1).
+draw_select_menu() {
+    local cursor=$1
+    print_header
+
+    local upd
+    upd=$(get_update_version)
+    if [ -n "$upd" ]; then
+        echo -e "  ${YELLOW}${BOLD}⬆ Update available:${RESET} ${DIM}v${VERSION} →${RESET} ${BOLD}${YELLOW}v${upd}${RESET}"
         echo ""
     fi
 
     echo -e "  ${BOLD}Select items to clean${RESET}"
-    echo -e "  ${DIM}Number = toggle · A = all · N = none · Enter = clean · Q = quit${RESET}"
+    echo -e "  ${DIM}↑↓ navigate · Space toggle · A all · N none · Enter clean · Q back${RESET}"
     echo ""
 
     local current_cat=""
@@ -634,10 +918,18 @@ show_menu() {
             selected_bytes=$((selected_bytes + sb))
         fi
 
-        local num
-        num=$(printf "%2d" $((i + 1)))
-        printf "    ${DIM}%s${RESET} %b  %-38s ${YELLOW}%s${RESET}\n" \
-            "$num" "$checkbox" "${LABELS[$i]}" "${SIZES[$i]}"
+        local prefix="    "
+        if [ "$i" = "$cursor" ]; then
+            prefix="  ${YELLOW}${BOLD}▶${RESET} "
+        fi
+
+        if [ "$i" = "$cursor" ]; then
+            printf "%b%b  ${BOLD}%-38s${RESET} ${YELLOW}%s${RESET}\n" \
+                "$prefix" "$checkbox" "${LABELS[$i]}" "${SIZES[$i]}"
+        else
+            printf "%b%b  %-38s ${YELLOW}%s${RESET}\n" \
+                "$prefix" "$checkbox" "${LABELS[$i]}" "${SIZES[$i]}"
+        fi
     done
 
     echo ""
@@ -645,50 +937,68 @@ show_menu() {
     local sel_human
     sel_human=$(bytes_human "$selected_bytes")
     echo -e "  ${BOLD}${total_selected}/${INDEX}${RESET} selected  ${DIM}·${RESET}  ${BOLD}${YELLOW}${sel_human}${RESET} ${DIM}to free${RESET}"
-    echo ""
 }
 
-interactive_select() {
-    while true; do
-        show_menu
-        echo -ne "  ${BOLD}Choice: ${RESET}"
-        read -r input
+# Arrow-key driven selection. Returns 0 to proceed, 1 to back out.
+arrow_select() {
+    [ "$INDEX" -eq 0 ] && return 1
+    local cursor=0
+    [ -t 1 ] && printf '\033[?25l'
 
-        case "$input" in
-            [Qq])
-                echo ""
-                echo -e "${YELLOW}  Bye! Nothing was deleted.${RESET}"
-                echo ""
-                exit 0
+    while true; do
+        draw_select_menu "$cursor"
+        local key
+        key=$(read_key)
+        case "$key" in
+            up|k)
+                cursor=$((cursor - 1))
+                [ "$cursor" -lt 0 ] && cursor=$((INDEX - 1))
                 ;;
-            [Aa])
+            down|j)
+                cursor=$((cursor + 1))
+                [ "$cursor" -ge "$INDEX" ] && cursor=0
+                ;;
+            pgup)
+                cursor=$((cursor - 10))
+                [ "$cursor" -lt 0 ] && cursor=0
+                ;;
+            pgdn)
+                cursor=$((cursor + 10))
+                [ "$cursor" -ge "$INDEX" ] && cursor=$((INDEX - 1))
+                ;;
+            home)
+                cursor=0
+                ;;
+            end)
+                cursor=$((INDEX - 1))
+                ;;
+            space)
+                if [ "${SELECTED[$cursor]}" = "1" ]; then
+                    SELECTED[$cursor]=0
+                else
+                    SELECTED[$cursor]=1
+                fi
+                ;;
+            a|A)
                 for i in $(seq 0 $((INDEX - 1))); do SELECTED[$i]=1; done
                 ;;
-            [Nn])
+            n|N)
                 for i in $(seq 0 $((INDEX - 1))); do SELECTED[$i]=0; done
                 ;;
-            [Uu])
+            u|U)
                 if [ -n "$(get_update_version)" ]; then
+                    [ -t 1 ] && printf '\033[?25h'
                     self_update
                     exit 0
                 fi
                 ;;
-            "")
-                break
+            enter)
+                [ -t 1 ] && printf '\033[?25h'
+                return 0
                 ;;
-            *)
-                for num in $(echo "$input" | tr ',' ' '); do
-                    if [[ "$num" =~ ^[0-9]+$ ]]; then
-                        local idx=$((num - 1))
-                        if [ "$idx" -ge 0 ] && [ "$idx" -lt "$INDEX" ]; then
-                            if [ "${SELECTED[$idx]}" = "1" ]; then
-                                SELECTED[$idx]=0
-                            else
-                                SELECTED[$idx]=1
-                            fi
-                        fi
-                    fi
-                done
+            q|Q|esc)
+                [ -t 1 ] && printf '\033[?25h'
+                return 1
                 ;;
         esac
     done
@@ -710,9 +1020,11 @@ confirm() {
     done
 
     if [ "$count" = "0" ]; then
-        echo -e "${YELLOW}  Nothing selected. Exiting.${RESET}"
+        echo -e "${YELLOW}  Nothing selected.${RESET}"
         echo ""
-        exit 0
+        echo -e "  ${DIM}Press any key to return...${RESET}"
+        read -rsn1
+        return 1
     fi
 
     echo ""
@@ -725,8 +1037,11 @@ confirm() {
         echo ""
         echo -e "${YELLOW}  Cancelled. Nothing was deleted.${RESET}"
         echo ""
-        exit 0
+        echo -e "  ${DIM}Press any key to return...${RESET}"
+        read -rsn1
+        return 1
     fi
+    return 0
 }
 
 # ── Clean ──────────────────────────────────────────────────────
@@ -736,10 +1051,28 @@ clean() {
     print_section "Cleaning..."
     echo ""
 
-    local total_to_clean=0
+    local total_to_clean=0 needs_sudo=0
     for i in $(seq 0 $((INDEX - 1))); do
-        [ "${SELECTED[$i]}" = "1" ] && total_to_clean=$((total_to_clean + 1))
+        if [ "${SELECTED[$i]}" = "1" ]; then
+            total_to_clean=$((total_to_clean + 1))
+            case "${TYPES[$i]}" in
+                sudo_path|sudo_clear|sleepimage|swapfiles) needs_sudo=1 ;;
+            esac
+        fi
     done
+
+    local sudo_keepalive_pid=""
+    if [ "$needs_sudo" = "1" ]; then
+        echo -e "  ${YELLOW}🔐 Some items need administrator privileges (sudo).${RESET}"
+        if ! sudo -v; then
+            echo -e "  ${RED}✗ sudo authorization failed. Skipping sudo items.${RESET}"
+            needs_sudo=0
+        else
+            ( while sudo -n true 2>/dev/null; do sleep 60; done ) &
+            sudo_keepalive_pid=$!
+        fi
+        echo ""
+    fi
 
     local success=0 failed=0 skipped=0 processed=0 freed_bytes=0
 
@@ -779,6 +1112,56 @@ clean() {
                         continue
                     fi
                     ;;
+                sudo_clear)
+                    if [ "$needs_sudo" = "1" ] && [ -d "$path" ]; then
+                        run_animated_clean "$bar" "$label" "$size" sudo find "$path" -mindepth 1 -delete
+                        result=$?
+                    else
+                        skipped=$((skipped + 1))
+                        printf "\r\033[K  %s  ${DIM}–  %-38s skipped${RESET}\n" "$bar" "$label"
+                        continue
+                    fi
+                    ;;
+                sudo_path)
+                    if [ "$needs_sudo" = "1" ] && [ -e "$path" ]; then
+                        run_animated_clean "$bar" "$label" "$size" sudo rm -rf "$path"
+                        result=$?
+                    else
+                        skipped=$((skipped + 1))
+                        printf "\r\033[K  %s  ${DIM}–  %-38s skipped${RESET}\n" "$bar" "$label"
+                        continue
+                    fi
+                    ;;
+                sleepimage)
+                    if [ "$needs_sudo" = "1" ]; then
+                        run_animated_clean "$bar" "$label" "$size" sudo rm -f /private/var/vm/sleepimage
+                        result=$?
+                    else
+                        skipped=$((skipped + 1))
+                        printf "\r\033[K  %s  ${DIM}–  %-38s skipped${RESET}\n" "$bar" "$label"
+                        continue
+                    fi
+                    ;;
+                swapfiles)
+                    if [ "$needs_sudo" = "1" ]; then
+                        run_animated_clean "$bar" "$label" "$size" sudo find /private/var/vm -name 'swapfile*' -delete
+                        result=$?
+                    else
+                        skipped=$((skipped + 1))
+                        printf "\r\033[K  %s  ${DIM}–  %-38s skipped${RESET}\n" "$bar" "$label"
+                        continue
+                    fi
+                    ;;
+                tm_snapshots)
+                    if command -v tmutil &>/dev/null; then
+                        run_animated_clean "$bar" "$label" "$size" tmutil thinlocalsnapshots / 999999999999 4
+                        result=$?
+                    else
+                        skipped=$((skipped + 1))
+                        printf "\r\033[K  %s  ${DIM}–  %-38s skipped${RESET}\n" "$bar" "$label"
+                        continue
+                    fi
+                    ;;
                 *)
                     if [ -e "$path" ]; then
                         run_animated_clean "$bar" "$label" "$size" rm -rf "$path"
@@ -803,6 +1186,8 @@ clean() {
             fi
         fi
     done
+
+    [ -n "$sudo_keepalive_pid" ] && kill "$sudo_keepalive_pid" 2>/dev/null
 
     local freed_human
     freed_human=$(bytes_human "$freed_bytes")
@@ -843,7 +1228,12 @@ main() {
         uninstall|--uninstall) uninstall_macsweep; exit 0 ;;
         version|--version|-v)  echo "macsweep v${VERSION}"; exit 0 ;;
         help|--help|-h)        show_help; exit 0 ;;
-        "")                    ;;
+        clean|--clean)
+            check_for_update_bg
+            cleanup_flow
+            exit 0
+            ;;
+        "") ;;
         *)
             echo -e "${RED}  Unknown command: $1${RESET}"
             echo ""
@@ -853,15 +1243,7 @@ main() {
     esac
 
     check_for_update_bg
-
-    scan
-    prompt_sensitive_items
-    interactive_select
-    confirm
-    clean
-    offer_install_after_clean
-
-    [ -n "$UPDATE_TMPFILE" ] && rm -f "$UPDATE_TMPFILE"
+    main_menu
 }
 
 main "$@"
