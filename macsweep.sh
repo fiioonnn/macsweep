@@ -17,7 +17,7 @@ DIM='\033[2m'
 RESET='\033[0m'
 
 # ── Configuration ──────────────────────────────────────────────
-VERSION="1.2.0"
+VERSION="1.2.1"
 GITHUB_REPO="fiioonnn/macsweep"
 GITHUB_RAW_URL="https://raw.githubusercontent.com/${GITHUB_REPO}/main/macsweep.sh"
 GITHUB_API_URL="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
@@ -142,14 +142,23 @@ draw_progress_bar() {
     printf "${CYAN}[%s]${RESET} ${BOLD}%3d%%${RESET} ${DIM}%d/%d${RESET}" "$bar" "$pct" "$current" "$total"
 }
 
+# macOS ships bash 3.2 which rejects fractional `read -t` timeouts.
+# bash 4+ accepts decimals (snappier ESC handling).
+if [ "${BASH_VERSINFO[0]:-0}" -ge 4 ]; then
+    READ_ESC_TIMEOUT="0.1"
+else
+    READ_ESC_TIMEOUT="1"
+fi
+
 # Read a single keystroke or escape sequence; emit symbolic name.
-# Maps: arrows, page up/down, home/end, enter, space, esc, plus literal chars.
+# Unrecognized escape sequences return "unknown" (no-op in menus) so the
+# script never quits on input we didn't anticipate.
 read_key() {
     local key rest extra
     IFS= read -rsn1 key
     case "$key" in
         $'\e')
-            IFS= read -rsn2 -t 0.1 rest
+            IFS= read -rsn2 -t "$READ_ESC_TIMEOUT" rest
             case "$rest" in
                 '[A') echo "up" ;;
                 '[B') echo "down" ;;
@@ -157,10 +166,10 @@ read_key() {
                 '[D') echo "left" ;;
                 '[H') echo "home" ;;
                 '[F') echo "end" ;;
-                '[5') IFS= read -rsn1 -t 0.1 extra; echo "pgup" ;;
-                '[6') IFS= read -rsn1 -t 0.1 extra; echo "pgdn" ;;
+                '[5') IFS= read -rsn1 -t "$READ_ESC_TIMEOUT" extra; echo "pgup" ;;
+                '[6') IFS= read -rsn1 -t "$READ_ESC_TIMEOUT" extra; echo "pgdn" ;;
                 '')   echo "esc" ;;
-                *)    echo "esc" ;;
+                *)    echo "unknown" ;;
             esac
             ;;
         $'\n'|$'\r'|'') echo "enter" ;;
